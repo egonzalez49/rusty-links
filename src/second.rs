@@ -3,6 +3,28 @@
 // IterMut - &mut T
 // Iter - &T
 
+// Lifetime elision occurs when Rust automatically picks lifetimes for you.
+// Some examples include:
+//  Only one reference in input, so the output must be derived from that input
+//  fn foo(&A) -> &B; // sugar for:
+//  fn foo<'a>(&'a A) -> &'a B;
+//
+//  Many inputs, assume they're all independent
+//  fn foo(&A, &B, &C); // sugar for:
+//  fn foo<'a, 'b, 'c>(&'a A, &'b B, &'c C);
+//
+//  Methods, assume all output lifetimes are derived from `self`
+//  fn foo(&self, &B, &C) -> &D; // sugar for:
+//  fn foo<'a, 'b, 'c>(&'a self, &'b B, &'c C) -> &'a D;
+//
+// 1. Each parameter that is a reference gets its own lifetime parameter.
+//
+// 2. If there is exactly one input lifetime parameter, that lifetime is assigned to all
+//      output lifetime parameters.
+//
+// 3. If there are multiple input lifetime parameters, but one of them is &self or &mut self,
+//      the lifetime of self is assigned to all the output lifetime parameters.
+
 pub struct List<T> {
     head: Link<T>,
 }
@@ -46,6 +68,18 @@ impl<T> List<T> {
     pub fn into_iter(self) -> IntoIter<T> {
         IntoIter(self)
     }
+
+    pub fn iter(&self) -> Iter<T> {
+        Iter {
+            next: self.head.as_deref(),
+        }
+    }
+
+    pub fn iter_mut(&mut self) -> IterMut<'_, T> {
+        IterMut {
+            next: self.head.as_deref_mut(),
+        }
+    }
 }
 
 pub struct IntoIter<T>(List<T>);
@@ -64,6 +98,36 @@ impl<T> Drop for List<T> {
         while let Some(mut boxed_node) = cur_link {
             cur_link = boxed_node.next.take()
         }
+    }
+}
+
+pub struct Iter<'a, T> {
+    next: Option<&'a Node<T>>,
+}
+
+impl<'a, T> Iterator for Iter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next.map(|node| {
+            self.next = node.next.as_deref();
+            &node.elem
+        })
+    }
+}
+
+pub struct IterMut<'a, T> {
+    next: Option<&'a mut Node<T>>,
+}
+
+impl<'a, T> Iterator for IterMut<'a, T> {
+    type Item = &'a mut T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next.take().map(|node| {
+            self.next = node.next.as_deref_mut();
+            &mut node.elem
+        })
     }
 }
 
@@ -135,5 +199,33 @@ mod tests {
         assert_eq!(iter.next(), Some(2));
         assert_eq!(iter.next(), Some(1));
         assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn iter() {
+        let mut list = List::new();
+
+        list.push(1);
+        list.push(2);
+        list.push(3);
+
+        let mut iter = list.iter();
+        assert_eq!(iter.next(), Some(&3));
+        assert_eq!(iter.next(), Some(&2));
+        assert_eq!(iter.next(), Some(&1));
+    }
+
+    #[test]
+    fn iter_mut() {
+        let mut list = List::new();
+
+        list.push(1);
+        list.push(2);
+        list.push(3);
+
+        let mut iter = list.iter_mut();
+        assert_eq!(iter.next(), Some(&mut 3));
+        assert_eq!(iter.next(), Some(&mut 2));
+        assert_eq!(iter.next(), Some(&mut 1));
     }
 }
